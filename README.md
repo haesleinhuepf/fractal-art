@@ -6,7 +6,7 @@ A Python package for generating 512x512 fractal art PNG images using common scie
 - `matplotlib`
 - `scikit-image`
 
-The generator combines multiple fractal families (`Mandelbrot`, `Julia`, and `Burning Ship`) and composites cropped fractal elements (for example tree sprites) into layered scenes for richer artwork.
+The generator combines multiple fractal families (`Mandelbrot`, `Julia`, `Burning Ship`, `Tricorn`, and `Newton`) and composites cropped fractal elements (for example tree sprites) into layered scenes with natural color palettes, horizons, lakes, reflections, stars, galaxies, and ringed planets.
 
 ## Installation
 

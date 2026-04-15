@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from matplotlib import colormaps
 from matplotlib import image as mpimg
 from scipy.ndimage import gaussian_filter
 from skimage import exposure, transform
@@ -11,11 +10,11 @@ from skimage import exposure, transform
 THEMES = ("landscape", "tree", "planet", "nebula", "ocean")
 STYLES = ("classic", "neon", "pastel", "mono")
 
-STYLE_CMAPS = {
-    "classic": "viridis",
-    "neon": "plasma",
-    "pastel": "magma",
-    "mono": "gray",
+STYLE_PALETTES = {
+    "classic": ("#0b1d2a", "#2c5f57", "#6f8f5c", "#d0b277", "#f1e3c6"),
+    "neon": ("#04070d", "#1d2854", "#3960b5", "#5ca7d6", "#c5f3ff"),
+    "pastel": ("#1b2534", "#5e7c8a", "#93b0a9", "#c6ccb1", "#efe0c8"),
+    "mono": ("#111111", "#5d5d5d", "#a7a7a7", "#f2f2f2"),
 }
 
 
@@ -98,11 +97,62 @@ def _burning_ship_field(size: int, seed: int, max_iter: int = 85) -> np.ndarray:
     return _normalize(gaussian_filter(field, sigma=1.0))
 
 
+def _tricorn_field(size: int, seed: int, max_iter: int = 95) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    cx, cy = rng.uniform(-0.9, 0.4), rng.uniform(-0.7, 0.7)
+    zoom = rng.uniform(0.9, 1.9)
+
+    axis = np.linspace(-1.7, 1.7, size)
+    x, y = np.meshgrid(axis, axis)
+    c = (x / zoom + cx) + 1j * (y / zoom + cy)
+    z = np.zeros_like(c)
+    field = np.zeros(c.shape, dtype=float)
+    active = np.ones(c.shape, dtype=bool)
+
+    for i in range(max_iter):
+        z[active] = np.conj(z[active]) * np.conj(z[active]) + c[active]
+        escaped = np.abs(z) > 2.0
+        newly_escaped = escaped & active
+        field[newly_escaped] = i
+        active &= ~escaped
+        if not np.any(active):
+            break
+
+    field[active] = max_iter
+    return _normalize(gaussian_filter(field, sigma=1.0))
+
+
+def _newton_field(size: int, seed: int, max_iter: int = 45) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    zoom = rng.uniform(0.8, 1.6)
+    axis = np.linspace(-1.5, 1.5, size)
+    x, y = np.meshgrid(axis, axis)
+    z = x / zoom + 1j * (y / zoom)
+
+    roots = np.array([1 + 0j, -0.5 + np.sqrt(3) / 2j, -0.5 - np.sqrt(3) / 2j])
+    field = np.zeros(z.shape, dtype=float)
+
+    for i in range(max_iter):
+        dz = 3.0 * z * z
+        safe = np.abs(dz) > 1e-8
+        z_next = z.copy()
+        z_next[safe] = z[safe] - (z[safe] ** 3 - 1.0) / dz[safe]
+        z = z_next
+        nearest = np.min(np.abs(z[:, :, None] - roots[None, None, :]), axis=2)
+        field += np.exp(-nearest * 4.5)
+        if np.max(nearest) < 1e-3:
+            break
+
+    return _normalize(gaussian_filter(field, sigma=1.2))
+
+
 def _fractal_layers(size: int, seed: int) -> dict[str, np.ndarray]:
     return {
         "mandelbrot": _mandelbrot_field(size, seed + 11),
         "julia": _julia_field(size, seed + 23),
         "burning_ship": _burning_ship_field(size, seed + 37),
+        "tricorn": _tricorn_field(size, seed + 47),
+        "newton": _newton_field(size, seed + 59),
     }
 
 
@@ -157,17 +207,61 @@ def _add_planet(canvas: np.ndarray, texture: np.ndarray, center: tuple[int, int]
     _alpha_blend(canvas, planet, alpha, center[0] - radius, center[1] - radius)
 
 
+def _add_planet_ring(
+    canvas: np.ndarray, texture: np.ndarray, center: tuple[int, int], radius: int, tilt: float = 0.45
+) -> None:
+    ring_size = int(radius * 2.7)
+    patch = transform.resize(texture, (ring_size, ring_size), anti_aliasing=True)
+    yy, xx = np.indices((ring_size, ring_size))
+    cy = (ring_size - 1) / 2
+    cx = (ring_size - 1) / 2
+    x_t = (xx - cx) * np.cos(tilt) + (yy - cy) * np.sin(tilt)
+    y_t = -(xx - cx) * np.sin(tilt) + (yy - cy) * np.cos(tilt)
+    a = radius * 1.34
+    b = radius * 0.48
+    ellipse = np.sqrt((x_t / max(a, 1e-6)) ** 2 + (y_t / max(b, 1e-6)) ** 2)
+    ring = (ellipse >= 0.78) & (ellipse <= 1.08)
+    alpha = gaussian_filter(ring.astype(float), sigma=1.2) * 0.58
+    layer = np.clip(patch * 0.95 + 0.12, 0.0, 1.0)
+    _alpha_blend(canvas, layer, alpha, center[0] - ring_size // 2, center[1] - ring_size // 2)
+
+
+def _add_horizon(canvas: np.ndarray, horizon: int, intensity: float = 0.16) -> None:
+    band = np.exp(-((np.arange(canvas.shape[0]) - horizon) / 3.5) ** 2)[:, None]
+    canvas += band * intensity
+
+
+def _add_stars(canvas: np.ndarray, seed: int, density: float = 0.015, strength: float = 0.75) -> None:
+    rng = np.random.default_rng(seed)
+    stars = (rng.random(canvas.shape) < density).astype(float)
+    twinkle = gaussian_filter(stars, sigma=0.55)
+    canvas += twinkle * strength
+
+
+def _colorize(grayscale: np.ndarray, style: str) -> np.ndarray:
+    palette = STYLE_PALETTES[style]
+    stops = np.linspace(0.0, 1.0, len(palette))
+    rgb = np.zeros((*grayscale.shape, 3), dtype=float)
+    g = np.clip(grayscale, 0.0, 1.0)
+    for c in range(3):
+        channel = np.array([int(p[1 + 2 * c : 3 + 2 * c], 16) for p in palette], dtype=float) / 255.0
+        rgb[:, :, c] = np.interp(g, stops, channel)
+    return rgb
+
+
 def _render_landscape(layers: dict[str, np.ndarray], seed: int) -> np.ndarray:
     rng = np.random.default_rng(seed)
     size = layers["mandelbrot"].shape[0]
 
-    sky = _normalize(gaussian_filter(layers["julia"] ** 0.85, sigma=2.0))
-    terrain = np.clip(layers["mandelbrot"] * 1.4 - np.gradient(layers["mandelbrot"])[0] * 0.8, 0.0, 1.0)
+    sky = _normalize(gaussian_filter(0.66 * layers["julia"] + 0.34 * layers["tricorn"], sigma=2.0))
+    terrain = np.clip(layers["mandelbrot"] * 1.35 - np.gradient(layers["mandelbrot"])[0] * 0.8, 0.0, 1.0)
     fog = np.linspace(0.35, 0.0, size)[:, None]
 
     canvas = np.clip(sky * 0.55 + fog, 0.0, 1.0)
-    horizon = int(size * 0.58)
+    horizon = int(size * 0.56)
+    lake_top = int(size * 0.62)
     canvas[horizon:, :] = np.maximum(canvas[horizon:, :], terrain[horizon:, :] * 0.95)
+    _add_horizon(canvas, horizon, intensity=0.14)
 
     sprite, alpha = _extract_tree_sprite(layers, seed + 101)
     for i in range(22):
@@ -178,6 +272,10 @@ def _render_landscape(layers: dict[str, np.ndarray], seed: int) -> np.ndarray:
         y = horizon + int(rng.integers(8, 36)) - tree.shape[0]
         _alpha_blend(canvas, tree, a, y, x)
 
+    reflection = np.flipud(canvas[: size - lake_top, :])
+    lake_tex = _normalize(0.6 * layers["newton"][lake_top:, :] + 0.4 * reflection[: size - lake_top, :])
+    canvas[lake_top:, :] = np.maximum(canvas[lake_top:, :], gaussian_filter(lake_tex, sigma=1.2) * 0.85)
+
     _add_planet(canvas, layers["burning_ship"], (int(size * 0.22), int(size * 0.78)), int(size * 0.08))
     return np.clip(canvas, 0.0, 1.0)
 
@@ -186,8 +284,10 @@ def _render_tree(layers: dict[str, np.ndarray], seed: int) -> np.ndarray:
     rng = np.random.default_rng(seed)
     size = layers["mandelbrot"].shape[0]
 
-    canvas = _normalize(0.3 * layers["julia"] + 0.35 * layers["burning_ship"])
+    canvas = _normalize(0.25 * layers["julia"] + 0.35 * layers["burning_ship"] + 0.4 * layers["newton"])
     canvas = np.clip(canvas * 0.5 + np.linspace(0.2, 0.8, size)[:, None] * 0.25, 0.0, 1.0)
+    horizon = int(size * 0.57)
+    _add_horizon(canvas, horizon, intensity=0.1)
 
     sprite, alpha = _extract_tree_sprite(layers, seed + 301)
     for row in range(3):
@@ -209,11 +309,17 @@ def _render_planet(layers: dict[str, np.ndarray], seed: int) -> np.ndarray:
     rng = np.random.default_rng(seed)
     size = layers["mandelbrot"].shape[0]
 
-    stars = np.clip((layers["julia"] > 0.94).astype(float) * 0.9, 0.0, 1.0)
-    nebula = _normalize(gaussian_filter(0.45 * layers["julia"] + 0.55 * layers["burning_ship"], sigma=3.0))
-    canvas = np.clip(nebula * 0.55 + gaussian_filter(stars, sigma=0.7) * 0.6, 0.0, 1.0)
+    stars = np.clip((layers["julia"] > 0.952).astype(float) * 0.9, 0.0, 1.0)
+    galaxy = _normalize(gaussian_filter(0.62 * layers["tricorn"] + 0.38 * layers["newton"], sigma=2.3))
+    nebula = _normalize(gaussian_filter(0.35 * layers["julia"] + 0.35 * layers["burning_ship"] + 0.3 * layers["tricorn"], sigma=3.0))
+    swirl = np.linspace(0.0, 1.0, size)[None, :]
+    canvas = np.clip(nebula * 0.42 + galaxy * 0.4 * (1.1 - np.abs(swirl - 0.58)) + gaussian_filter(stars, sigma=0.7) * 0.6, 0.0, 1.0)
+    _add_stars(canvas, seed + 777, density=0.012, strength=0.52)
 
-    _add_planet(canvas, layers["burning_ship"], (int(size * 0.54), int(size * 0.42)), int(size * 0.22))
+    center = (int(size * 0.54), int(size * 0.42))
+    radius = int(size * 0.22)
+    _add_planet_ring(canvas, layers["newton"], center, radius)
+    _add_planet(canvas, layers["burning_ship"], center, radius)
     _add_planet(canvas, layers["mandelbrot"], (int(size * 0.22), int(size * 0.82)), int(size * 0.07))
 
     sprite, alpha = _extract_tree_sprite(layers, seed + 401)
@@ -229,30 +335,40 @@ def _render_planet(layers: dict[str, np.ndarray], seed: int) -> np.ndarray:
 
 
 def _render_nebula(layers: dict[str, np.ndarray], seed: int) -> np.ndarray:
-    _ = seed
-    base = _normalize(0.38 * layers["mandelbrot"] + 0.34 * layers["julia"] + 0.28 * layers["burning_ship"])
+    base = _normalize(
+        0.26 * layers["mandelbrot"]
+        + 0.24 * layers["julia"]
+        + 0.2 * layers["burning_ship"]
+        + 0.15 * layers["tricorn"]
+        + 0.15 * layers["newton"]
+    )
     filaments = np.clip(gaussian_filter(base ** 0.65, sigma=1.6) * 1.15, 0.0, 1.0)
     stars = gaussian_filter((layers["julia"] > 0.96).astype(float), sigma=0.8) * 0.9
-    return np.clip(filaments * 0.85 + stars, 0.0, 1.0)
+    canvas = np.clip(filaments * 0.85 + stars, 0.0, 1.0)
+    _add_stars(canvas, seed + 991, density=0.009, strength=0.32)
+    return np.clip(canvas, 0.0, 1.0)
 
 
 def _render_ocean(layers: dict[str, np.ndarray], seed: int) -> np.ndarray:
     size = layers["mandelbrot"].shape[0]
     horizon = int(size * 0.52)
 
-    sky = _normalize(gaussian_filter(0.6 * layers["julia"] + 0.4 * layers["burning_ship"], sigma=1.8))
-    water = _normalize(gaussian_filter(0.55 * layers["mandelbrot"] + 0.45 * layers["julia"], sigma=1.2))
+    sky = _normalize(gaussian_filter(0.42 * layers["julia"] + 0.35 * layers["burning_ship"] + 0.23 * layers["tricorn"], sigma=1.8))
+    water = _normalize(gaussian_filter(0.44 * layers["mandelbrot"] + 0.33 * layers["julia"] + 0.23 * layers["newton"], sigma=1.2))
     waves = np.sin(np.linspace(0, 22 * np.pi, size))[:, None] * 0.09
 
     canvas = np.clip(sky * 0.58, 0.0, 1.0)
     water_region = np.clip(water[horizon:, :] * 0.9 + waves[horizon:, :] + 0.08, 0.0, 1.0)
     canvas[horizon:, :] = np.maximum(canvas[horizon:, :], water_region)
+    _add_horizon(canvas, horizon, intensity=0.18)
 
-    _add_planet(canvas, layers["burning_ship"], (int(size * 0.23), int(size * 0.72)), int(size * 0.09))
+    planet_center = (int(size * 0.23), int(size * 0.72))
+    _add_planet(canvas, layers["burning_ship"], planet_center, int(size * 0.09))
 
     reflection = np.flipud(canvas[: size - horizon, :])
     blend = np.clip(gaussian_filter(reflection, sigma=2.5) * 0.35, 0.0, 1.0)
     canvas[horizon:, :] = np.maximum(canvas[horizon:, :], blend[: size - horizon, :])
+    _add_stars(canvas[:horizon, :], seed + 2026, density=0.011, strength=0.4)
     return np.clip(canvas, 0.0, 1.0)
 
 
@@ -297,8 +413,7 @@ def generate_art(
 
     layers = _fractal_layers(size=size, seed=seed)
     grayscale = RENDERERS[theme](layers, seed)
-    rgba = colormaps[STYLE_CMAPS[style]](grayscale)
-    rgb = (rgba[:, :, :3] * 255).astype(np.uint8)
+    rgb = (_colorize(grayscale, style) * 255).astype(np.uint8)
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
