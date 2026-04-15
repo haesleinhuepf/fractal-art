@@ -20,6 +20,16 @@ STYLE_CMAPS = {
 
 
 def _fractal_field(size: int, seed: int, max_iter: int = 80) -> np.ndarray:
+    """Generate a normalized Mandelbrot-like fractal field.
+
+    Args:
+        size: Width and height of the square output field.
+        seed: Random seed controlling center and zoom variation.
+        max_iter: Maximum escape-time iterations.
+
+    Returns:
+        A 2D float array scaled to [0, 1].
+    """
     rng = np.random.default_rng(seed)
     cx, cy = rng.uniform(-0.8, 0.8), rng.uniform(-0.8, 0.8)
     zoom = rng.uniform(0.7, 1.6)
@@ -47,6 +57,7 @@ def _fractal_field(size: int, seed: int, max_iter: int = 80) -> np.ndarray:
 
 
 def _render_landscape(field: np.ndarray) -> np.ndarray:
+    """Transform a fractal field into a landscape-like grayscale map."""
     gradient = np.gradient(field)[0]
     terrain = np.clip(field * 1.4 - gradient * 0.6, 0.0, 1.0)
     sky = np.linspace(0.15, 1.0, field.shape[0])[:, None]
@@ -54,6 +65,7 @@ def _render_landscape(field: np.ndarray) -> np.ndarray:
 
 
 def _render_tree(field: np.ndarray) -> np.ndarray:
+    """Transform a fractal field into a tree-like grayscale map."""
     h, w = field.shape
     y, x = np.indices((h, w))
     x0 = w / 2
@@ -63,6 +75,7 @@ def _render_tree(field: np.ndarray) -> np.ndarray:
 
 
 def _render_planet(field: np.ndarray) -> np.ndarray:
+    """Transform a fractal field into a planet-like grayscale map."""
     h, w = field.shape
     y, x = np.indices((h, w))
     r = min(h, w) * 0.34
@@ -75,10 +88,12 @@ def _render_planet(field: np.ndarray) -> np.ndarray:
 
 
 def _render_nebula(field: np.ndarray) -> np.ndarray:
+    """Transform a fractal field into a nebula-like grayscale map."""
     return np.clip(gaussian_filter(field ** 0.7, sigma=2.0) * 1.1, 0.0, 1.0)
 
 
 def _render_ocean(field: np.ndarray) -> np.ndarray:
+    """Transform a fractal field into an ocean-like grayscale map."""
     waves = np.sin(np.linspace(0, 8 * np.pi, field.shape[0]))[:, None] * 0.2
     return np.clip(field * 0.8 + waves + 0.2, 0.0, 1.0)
 
@@ -100,6 +115,21 @@ def generate_art(
     seed: int = 0,
     size: int = 512,
 ) -> Path:
+    """Generate a single 512x512 fractal art PNG image.
+
+    Args:
+        output_path: File path where the PNG will be written.
+        theme: Content theme for rendering.
+        style: Colormap style.
+        seed: Random seed for reproducible variation.
+        size: Image size; only 512 is supported.
+
+    Returns:
+        The path to the written image.
+
+    Raises:
+        ValueError: If theme, style, or size is invalid.
+    """
     if theme not in THEMES:
         raise ValueError(f"Unknown theme '{theme}'. Available: {', '.join(THEMES)}")
     if style not in STYLES:
@@ -119,6 +149,14 @@ def generate_art(
 
 
 def generate_gallery(output_dir: str | Path) -> list[Path]:
+    """Generate 20 example images across available themes and styles.
+
+    Args:
+        output_dir: Directory where examples are written.
+
+    Returns:
+        A list of paths to generated PNG files.
+    """
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
