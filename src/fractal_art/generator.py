@@ -238,14 +238,20 @@ def _add_stars(canvas: np.ndarray, seed: int, density: float = 0.015, strength: 
     canvas += twinkle * strength
 
 
+def _hex_to_rgb(color: str) -> tuple[float, float, float]:
+    return tuple(int(color[i : i + 2], 16) / 255.0 for i in (1, 3, 5))
+
+
 def _colorize(grayscale: np.ndarray, style: str) -> np.ndarray:
+    if style not in STYLE_PALETTES:
+        raise ValueError(f"Unknown style '{style}'. Available: {', '.join(STYLES)}")
     palette = STYLE_PALETTES[style]
     stops = np.linspace(0.0, 1.0, len(palette))
+    palette_rgb = np.array([_hex_to_rgb(p) for p in palette], dtype=float)
     rgb = np.zeros((*grayscale.shape, 3), dtype=float)
     g = np.clip(grayscale, 0.0, 1.0)
     for c in range(3):
-        channel = np.array([int(p[1 + 2 * c : 3 + 2 * c], 16) for p in palette], dtype=float) / 255.0
-        rgb[:, :, c] = np.interp(g, stops, channel)
+        rgb[:, :, c] = np.interp(g, stops, palette_rgb[:, c])
     return rgb
 
 
