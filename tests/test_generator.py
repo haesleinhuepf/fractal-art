@@ -19,7 +19,7 @@ class TestGenerator(unittest.TestCase):
     def test_rejects_non_512_size(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "invalid.png"
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(ValueError, "Only 512x512 output is supported\\."):
                 generate_art(output, size=256)
 
 

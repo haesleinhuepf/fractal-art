@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 from matplotlib import colormaps
+from matplotlib import image as mpimg
 from scipy.ndimage import gaussian_filter
 from skimage import exposure
 
@@ -113,8 +114,6 @@ def generate_art(
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    from matplotlib import image as mpimg
-
     mpimg.imsave(output, rgb)
     return output
 
